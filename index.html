@@ -1,0 +1,412 @@
+<!--
+  Qiyam — Islamic Prayer Times (Full Version)
+  Features:
+    - Auto-detect user location (Geolocation) + manual city/country input
+    - Fetches prayer times from Aladhan API
+    - Gregorian + Hijri date display (Intl with islamic calendar)
+    - Real-time clock + countdown to next prayer
+    - Qibla compass (bearing to Kaaba) + optional device heading support
+    - Responsive & PC-friendly design using Tailwind CDN
+  Notes:
+    - For Geolocation and DeviceOrientation APIs browsers require HTTPS.
+    - To test locally run a simple server:
+        python -m http.server 8000
+      then visit http://localhost:8000
+-->
+
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Qiyam — Prayer Times</title>
+
+  <!-- Tailwind CDN for quick styling (production: build with Tailwind properly) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    :root{
+      --accent-green: #0f766e;
+      --accent-gold: #D4AF37;
+      --bg-soft: #f7fdfb;
+    }
+    body{ background:var(--bg-soft); font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+    .gold{ color:var(--accent-gold); }
+    /* Compass visuals */
+    .compass {
+      width:160px; height:160px; border-radius:9999px;
+      display:grid; place-items:center;
+      background:linear-gradient(180deg,#ffffffcc,#e7f7f3cc);
+      box-shadow:0 6px 18px rgba(0,0,0,0.08);
+    }
+    .needle {
+      width:8px; height:60px; border-radius:8px; background:var(--accent-gold);
+      transform-origin:50% 80%; transition: transform 0.25s ease-out;
+    }
+    .needle .tip{
+      width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;
+      border-bottom:14px solid var(--accent-gold); position:relative; top:-6px;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+  <main class="w-full max-w-5xl">
+    <!-- Header -->
+    <header class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between">
+      <div>
+        <h1 class="text-3xl font-bold text-emerald-800">Qiyam</h1>
+        <p class="text-gray-600">Your daily guide to prayer times & Qibla direction</p>
+      </div>
+      <div class="mt-4 md:mt-0 text-right">
+        <div id="localClock" class="font-mono text-lg text-gray-700">--:--:--</div>
+        <div id="tzLabel" class="text-xs text-gray-500">Timezone</div>
+      </div>
+    </header>
+
+    <!-- Controls: geolocation + manual city + method -->
+    <section class="mb-6 bg-white p-4 rounded-2xl shadow-sm">
+      <div class="grid md:grid-cols-2 gap-4">
+        <div>
+          <label class="text-xs text-gray-500">Location</label>
+          <div class="mt-2 flex gap-2 flex-wrap">
+            <button id="btnGeo" class="px-3 py-2 rounded-md bg-emerald-600 text-white text-sm">Detect My Location</button>
+            <input id="cityInput" placeholder="City" class="px-3 py-2 rounded-md border text-sm" />
+            <input id="countryInput" placeholder="Country" class="px-3 py-2 rounded-md border text-sm" />
+            <button id="btnUseCity" class="px-3 py-2 rounded-md bg-yellow-500 text-white text-sm">Use City</button>
+          </div>
+          <p id="locStatus" class="mt-2 text-xs text-gray-500">Status: waiting for location...</p>
+        </div>
+
+        <div>
+          <label class="text-xs text-gray-500">Calculation Method</label>
+          <select id="method" class="w-full mt-2 px-3 py-2 rounded-md border text-sm">
+            <option value="2">University of Islamic Sciences, Karachi</option>
+            <option value="1">Muslim World League</option>
+            <option value="4">Umm Al-Qura, Makkah</option>
+            <option value="3">Egyptian General Authority</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dates & Next Prayer / Qibla -->
+    <section class="mb-6 grid md:grid-cols-3 gap-4">
+      <div class="md:col-span-2 bg-white p-4 rounded-2xl shadow-sm flex justify-between">
+        <div>
+          <div id="gregorianDate" class="text-sm text-gray-600">Gregorian Date</div>
+          <div id="hijriDate" class="text-lg font-medium text-emerald-800">Hijri Date</div>
+        </div>
+        <div class="text-right">
+          <div class="text-xs text-gray-500">Next prayer</div>
+          <div id="nextPrayerName" class="text-2xl font-semibold gold">—</div>
+          <div id="countdown" class="font-mono text-sm text-gray-700">--:--:--</div>
+        </div>
+      </div>
+
+      <div class="bg-white p-4 rounded-2xl shadow-sm flex flex-col items-center">
+        <div class="text-xs text-gray-500">Qibla</div>
+        <div class="compass mt-2" id="compass">
+          <div class="needle" id="needle"><div class="tip"></div></div>
+        </div>
+        <div class="text-sm text-gray-600 mt-2" id="qiblaDeg">—°</div>
+        <button id="enableHeading" class="mt-2 text-xs px-3 py-1 rounded-md bg-emerald-100 text-emerald-700">Enable Device Heading</button>
+      </div>
+    </section>
+
+    <!-- Prayer times list -->
+    <section class="bg-white p-4 rounded-2xl shadow-sm">
+      <h2 class="text-sm text-gray-500 mb-3">Prayer Times</h2>
+      <div id="prayerList" class="grid grid-cols-2 md:grid-cols-5 gap-4 text-center text-sm">
+        <!-- JS will fill this -->
+      </div>
+    </section>
+
+    <footer class="mt-6 text-center text-xs text-gray-500">Qiyam • Uses Aladhan API • Desktop & mobile friendly</footer>
+  </main>
+
+  <script>
+    /* ------------------------
+       Constants & State
+       ------------------------ */
+    const KAABA = { lat: 21.422487, lon: 39.826206 }; // Kaaba coordinates
+    const PRAYERS = ['Fajr','Dhuhr','Asr','Maghrib','Isha'];
+
+    let userCoords = null;        // {lat, lon}
+    let currentTimings = null;    // Aladhan timings object
+    let prayerDates = null;       // mapping prayer -> Date object
+    let countdownInterval = null;
+    let headingAvailable = false;
+    let deviceHeading = 0;        // degrees from device sensor (alpha)
+
+    /* ------------------------
+       DOM references
+       ------------------------ */
+    const btnGeo = document.getElementById('btnGeo');
+    const btnUseCity = document.getElementById('btnUseCity');
+    const cityInput = document.getElementById('cityInput');
+    const countryInput = document.getElementById('countryInput');
+    const locStatus = document.getElementById('locStatus');
+    const prayerList = document.getElementById('prayerList');
+    const nextPrayerName = document.getElementById('nextPrayerName');
+    const countdownEl = document.getElementById('countdown');
+    const gregorianDateEl = document.getElementById('gregorianDate');
+    const hijriDateEl = document.getElementById('hijriDate');
+    const localClock = document.getElementById('localClock');
+    const tzLabel = document.getElementById('tzLabel');
+    const methodSelect = document.getElementById('method');
+    const qiblaDegEl = document.getElementById('qiblaDeg');
+    const needle = document.getElementById('needle');
+    const enableHeadingBtn = document.getElementById('enableHeading');
+
+    /* ------------------------
+       Utility functions
+       ------------------------ */
+    function toRadians(d){ return d*Math.PI/180; }
+    function toDegrees(r){ return r*180/Math.PI; }
+
+    // Great-circle initial bearing from (lat1, lon1) to (lat2, lon2)
+    function calculateBearing(lat1, lon1, lat2, lon2){
+      const φ1 = toRadians(lat1), φ2 = toRadians(lat2), Δλ = toRadians(lon2 - lon1);
+      const y = Math.sin(Δλ) * Math.cos(φ2);
+      const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+      const θ = Math.atan2(y, x);
+      return (toDegrees(θ) + 360) % 360;
+    }
+
+    // Parse "HH:MM" string to a Date object on baseDate (local timezone)
+    function parseTimeToDate(timeStr, baseDate){
+      const cleaned = (timeStr || '').replace(/\(.*\)/,'').trim(); // remove parentheses like "(EET)"
+      const parts = cleaned.split(':').map(Number);
+      const h = parts[0] || 0, m = parts[1] || 0;
+      return new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate(), h, m, 0);
+    }
+
+    // Format milliseconds to HH:MM:SS
+    function formatHMS(ms){
+      if(ms <= 0) return '00:00:00';
+      const s = Math.floor(ms/1000);
+      const hh = Math.floor(s/3600);
+      const mm = Math.floor((s%3600)/60);
+      const ss = s % 60;
+      return [hh,mm,ss].map(n => String(n).padStart(2,'0')).join(':');
+    }
+
+    // Hijri string via Intl (modern browsers)
+    function getHijriString(date){
+      try{
+        return new Intl.DateTimeFormat('en-GB-u-ca-islamic', { weekday:'long', day:'numeric', month:'long', year:'numeric' }).format(date);
+      }catch(e){
+        return '';
+      }
+    }
+
+    /* ------------------------
+       Aladhan API calls
+       ------------------------ */
+    async function fetchTimingsByCoords(lat, lon){
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const method = methodSelect.value;
+      const url = `https://api.aladhan.com/v1/timings?latitude=${lat}&longitude=${lon}&method=${method}&timezonestring=${encodeURIComponent(tz)}`;
+      locStatus.textContent = 'Fetching prayer times...';
+      try{
+        const res = await fetch(url);
+        const data = await res.json();
+        if(data && data.code === 200 && data.data){
+          currentTimings = data.data.timings;
+          tzLabel.textContent = data.data.meta.timezone || tz;
+          locStatus.textContent = `Using detected location — timezone: ${tzLabel.textContent}`;
+          return data.data;
+        } else {
+          locStatus.textContent = 'Aladhan returned unexpected response.';
+          console.warn('Aladhan response', data);
+          return null;
+        }
+      }catch(err){
+        console.error('Aladhan fetch error', err);
+        locStatus.textContent = 'Failed to fetch timings (network error).';
+        return null;
+      }
+    }
+
+    async function fetchTimingsByCity(city, country){
+      const method = methodSelect.value;
+      const url = `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(city)}&country=${encodeURIComponent(country||'')}&method=${method}`;
+      locStatus.textContent = 'Fetching prayer times for city...';
+      try{
+        const res = await fetch(url);
+        const data = await res.json();
+        if(data && data.code === 200 && data.data){
+          currentTimings = data.data.timings;
+          tzLabel.textContent = data.data.meta.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+          locStatus.textContent = `Using city: ${city}${country ? ', ' + country : ''}`;
+          return data.data;
+        } else {
+          locStatus.textContent = 'City fetch returned unexpected response.';
+          console.warn('Aladhan timingsByCity', data);
+          return null;
+        }
+      }catch(err){
+        console.error('City fetch error', err);
+        locStatus.textContent = 'Failed to fetch timings for city.';
+        return null;
+      }
+    }
+
+    /* ------------------------
+       Rendering & countdown
+       ------------------------ */
+    function renderPrayerList(timings, baseDate){
+      prayerDates = {};
+      prayerList.innerHTML = '';
+      for(const p of PRAYERS){
+        const t = timings[p];
+        const dateObj = parseTimeToDate(t, baseDate);
+        prayerDates[p] = dateObj;
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded-lg border border-transparent hover:border-emerald-100';
+        card.innerHTML = `<div class="text-xs text-gray-500">${p}</div><div class="text-lg font-semibold text-emerald-800">${t}</div>`;
+        prayerList.appendChild(card);
+      }
+    }
+
+    function findNextPrayer(now){
+      for(const p of PRAYERS){
+        if(prayerDates[p] && prayerDates[p] > now){
+          return { name: p, time: prayerDates[p] };
+        }
+      }
+      // None left — next is tomorrow's Fajr
+      const fajrToday = prayerDates['Fajr'];
+      const fajrTomorrow = new Date(fajrToday);
+      fajrTomorrow.setDate(fajrTomorrow.getDate() + 1);
+      return { name: 'Fajr', time: fajrTomorrow };
+    }
+
+    function highlightNextPrayer(next){
+      nextPrayerName.textContent = next.name;
+      // optional: add visual highlight in list — simplified for brevity
+    }
+
+    function startClockAndCountdown(){
+      if(countdownInterval) clearInterval(countdownInterval);
+      countdownInterval = setInterval(() => {
+        const now = new Date();
+        localClock.textContent = now.toLocaleTimeString();
+        gregorianDateEl.textContent = now.toLocaleDateString(undefined, { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+        hijriDateEl.textContent = getHijriString(now) || 'Hijri not available';
+
+        if(prayerDates){
+          const next = findNextPrayer(now);
+          highlightNextPrayer(next);
+          const diff = next.time - now;
+          countdownEl.textContent = formatHMS(diff);
+        }
+      }, 1000);
+    }
+
+    /* ------------------------
+       Qibla compass
+       ------------------------ */
+    function updateQibla(){
+      if(!userCoords) return;
+      const bearing = calculateBearing(userCoords.lat, userCoords.lon, KAABA.lat, KAABA.lon);
+      qiblaDegEl.textContent = Math.round(bearing) + '°';
+      const rotation = headingAvailable ? (bearing - deviceHeading) : bearing;
+      needle.style.transform = `rotate(${rotation}deg)`;
+    }
+
+    async function enableDeviceHeading(){
+      // iOS requires permission via DeviceOrientationEvent.requestPermission()
+      if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+        try{
+          const perm = await DeviceOrientationEvent.requestPermission();
+          if(perm === 'granted'){
+            window.addEventListener('deviceorientation', handleOrientation, true);
+            headingAvailable = true;
+            enableHeadingBtn.textContent = 'Heading enabled';
+          } else {
+            alert('Device orientation permission denied.');
+          }
+        }catch(err){
+          console.warn('Orientation permission error', err);
+          alert('Unable to enable device heading. See console for details.');
+        }
+      } else {
+        // other browsers
+        window.addEventListener('deviceorientation', handleOrientation, true);
+        headingAvailable = true;
+        enableHeadingBtn.textContent = 'Heading enabled';
+      }
+    }
+
+    function handleOrientation(evt){
+      if(evt && evt.alpha != null){
+        // alpha usually represents rotation around z-axis; behavior varies by device
+        deviceHeading = evt.alpha;
+        updateQibla();
+      }
+    }
+
+    /* ------------------------
+       Event handlers
+       ------------------------ */
+    enableHeadingBtn.addEventListener('click', enableDeviceHeading);
+
+    btnGeo.addEventListener('click', () => {
+      locStatus.textContent = 'Requesting geolocation...';
+      if(!navigator.geolocation){
+        locStatus.textContent = 'Geolocation not supported by your browser.';
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        locStatus.textContent = `Location detected: ${userCoords.lat.toFixed(4)}, ${userCoords.lon.toFixed(4)}`;
+        const data = await fetchTimingsByCoords(userCoords.lat, userCoords.lon);
+        if(data){
+          renderPrayerList(data.timings, new Date());
+          updateQibla();
+          startClockAndCountdown();
+        }
+      }, (err) => {
+        console.error('Geolocation error', err);
+        locStatus.textContent = 'Geolocation failed or permission denied.';
+      }, { maximumAge: 60*1000, timeout: 10000 });
+    });
+
+    btnUseCity.addEventListener('click', async () => {
+      const city = cityInput.value.trim();
+      const country = countryInput.value.trim();
+      if(!city){
+        locStatus.textContent = 'Please enter a city.';
+        return;
+      }
+      const data = await fetchTimingsByCity(city, country);
+      if(data){
+        renderPrayerList(data.timings, new Date());
+        // Aladhan may include meta.latitude/meta.longitude
+        if(data.meta && data.meta.latitude && data.meta.longitude){
+          userCoords = { lat: data.meta.latitude, lon: data.meta.longitude };
+          updateQibla();
+        }
+        startClockAndCountdown();
+      }
+    });
+
+    /* ------------------------
+       Init
+       ------------------------ */
+    (function init(){
+      tzLabel.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const now = new Date();
+      gregorianDateEl.textContent = now.toLocaleDateString(undefined, { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+      hijriDateEl.textContent = getHijriString(now) || 'Hijri not available';
+      localClock.textContent = now.toLocaleTimeString();
+    })();
+
+    // Clean up on unload
+    window.addEventListener('beforeunload', () => {
+      if(countdownInterval) clearInterval(countdownInterval);
+    });
+  </script>
+</body>
+</html>
